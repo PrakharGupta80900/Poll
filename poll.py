@@ -4,24 +4,10 @@ import os
 import time
 from datetime import datetime
 
-# Custom auto-refresh implementation using meta refresh and session state
-def auto_refresh():
-    # Add meta refresh tag for auto-refresh every 3 seconds
-    st.markdown("""
-    <meta http-equiv="refresh" content="3">
-    <script>
-    setTimeout(function(){
-        window.location.reload(1);
-    }, 3000);
-    </script>
-    """, unsafe_allow_html=True)
-
-# Initialize auto-refresh
-auto_refresh()
-
 # File paths for persistent storage
 POLLS_FILE = "polls_data.json"
 VOTES_FILE = "user_votes.json"
+REFRESH_TRIGGER_FILE = "refresh_trigger.json"
 
 # Load data from files
 def load_polls():
@@ -50,6 +36,33 @@ def save_user_votes(votes_data):
     with open(VOTES_FILE, 'w') as f:
         json.dump(votes_data, f)
 
+def get_refresh_trigger():
+    if os.path.exists(REFRESH_TRIGGER_FILE):
+        try:
+            with open(REFRESH_TRIGGER_FILE, 'r') as f:
+                data = json.load(f)
+                return data.get('timestamp', 0)
+        except:
+            return 0
+    return 0
+
+def trigger_refresh():
+    with open(REFRESH_TRIGGER_FILE, 'w') as f:
+        json.dump({'timestamp': time.time()}, f)
+
+def check_for_refresh():
+    if 'last_refresh_check' not in st.session_state:
+        st.session_state.last_refresh_check = 0
+    
+    current_trigger = get_refresh_trigger()
+    if current_trigger > st.session_state.last_refresh_check:
+        st.session_state.last_refresh_check = current_trigger
+        st.rerun()
+
+# Check for admin-triggered refresh (only for non-admin users)
+if 'user_role' not in st.session_state or st.session_state.user_role != "admin":
+    check_for_refresh()
+
 # Initialize session state for user role and unique ID
 if "user_role" not in st.session_state:
     st.session_state.user_role = "user"
@@ -61,7 +74,7 @@ ADMIN_USERNAME = "SRMS"
 ADMIN_PASSWORD = "SRMS@450"
 
 st.title("🗳️ Dynamic Polling App")
-st.caption("🔄 Auto-refreshing every 3 seconds for real-time updates")
+st.caption("� Admin-controlled refresh system for real-time updates")
 
 # Load current data from files
 polls_data = load_polls()
@@ -97,6 +110,14 @@ st.sidebar.write(f"**Current Role:** {st.session_state.user_role.title()}")
 if st.session_state.user_role == "admin":
     st.sidebar.header("🔧 Admin Controls")
     
+    # Admin refresh button
+    if st.sidebar.button("🔄 Refresh All Users", help="Update all user screens with latest changes"):
+        trigger_refresh()
+        st.sidebar.success("All users will see updates now!")
+        st.rerun()
+    
+    st.sidebar.markdown("---")
+    
     # Add new poll
     with st.sidebar.expander("➕ Add New Poll"):
         poll_question = st.text_input("Enter your question:")
@@ -111,7 +132,7 @@ if st.session_state.user_role == "admin":
                     current_polls[poll_question] = {opt: 0 for opt in options}
                     save_polls(current_polls)
                     st.success("Poll created successfully!")
-                    st.rerun()
+                    st.info("💡 Click 'Refresh All Users' to update everyone's screen")
                 else:
                     st.error("Please provide at least 2 options.")
             else:
@@ -138,6 +159,7 @@ if st.session_state.user_role == "admin":
                     save_user_votes(current_votes)
                     
                     st.success(f"Poll deleted!")
+                    st.info("💡 Click 'Refresh All Users' to update everyone's screen")
                     st.rerun()
 else:
     # Regular user cannot create polls
