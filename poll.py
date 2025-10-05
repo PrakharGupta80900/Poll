@@ -85,7 +85,7 @@ if "user_id" not in st.session_state:
 ADMIN_USERNAME = st.secrets.get("ADMIN_USERNAME", "SRMS")
 ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "SRMS@450")
 
-st.title("🗳️ Dynamic Polling App")
+st.title("🗳️ Myth or fact")
 
 # Load current data from shared store (in-memory)
 polls_data = load_polls()
@@ -181,13 +181,16 @@ if st.session_state.user_role == "admin":
     # Reset polling data (votes) for a question without deleting the question
     if polls_data:
         with st.sidebar.expander("🧹 Reset Polling Data"):
-            reset_q = st.selectbox(
-                "Select a poll to reset votes:",
-                options=list(polls_data.keys()),
-                key="reset_select_question",
-            )
+            reset_all = st.checkbox("Select all polls", key="reset_all_polls")
+            if not reset_all:
+                reset_q = st.selectbox(
+                    "Select a poll to reset votes:",
+                    options=list(polls_data.keys()),
+                    key="reset_select_question",
+                )
             confirm_text = st.text_input("Type RESET to confirm", key="reset_confirm_text")
-            if st.button("Reset Votes", key="reset_votes_btn"):
+            action_label = "Reset All Votes" if reset_all else "Reset Votes"
+            if st.button(action_label, key="reset_votes_btn"):
                 if confirm_text.strip().upper() != "RESET":
                     st.error("Please type RESET to confirm.")
                 else:
@@ -196,55 +199,63 @@ if st.session_state.user_role == "admin":
                         current_polls = load_polls().copy()
                         current_votes = load_user_votes().copy()
 
-                        # Zero out vote counts for the selected poll
-                        if reset_q in current_polls:
-                            for opt in list(current_polls[reset_q].keys()):
-                                current_polls[reset_q][opt] = 0
+                        if reset_all:
+                            # Zero counts for all polls
+                            for q in list(current_polls.keys()):
+                                for opt in list(current_polls[q].keys()):
+                                    current_polls[q][opt] = 0
                             save_polls(current_polls)
-
-                        # Remove users' recorded vote for the selected poll
-                        changed = False
-                        for user_id in list(current_votes.keys()):
-                            if reset_q in current_votes[user_id]:
-                                del current_votes[user_id][reset_q]
-                                changed = True
-                            if user_id in current_votes and len(current_votes[user_id]) == 0:
+                            # Remove all users' recorded votes across all polls
+                            for user_id in list(current_votes.keys()):
+                                # clear the dict for the user
                                 del current_votes[user_id]
-                        if changed:
                             save_user_votes(current_votes)
+                        else:
+                            # Zero out vote counts for the selected poll
+                            if reset_q in current_polls:
+                                for opt in list(current_polls[reset_q].keys()):
+                                    current_polls[reset_q][opt] = 0
+                                save_polls(current_polls)
 
-                    st.success(f"Votes reset for: {reset_q}")
+                            # Remove users' recorded vote for the selected poll
+                            changed = False
+                            for user_id in list(current_votes.keys()):
+                                if reset_q in current_votes[user_id]:
+                                    del current_votes[user_id][reset_q]
+                                    changed = True
+                                if user_id in current_votes and len(current_votes[user_id]) == 0:
+                                    del current_votes[user_id]
+                            if changed:
+                                save_user_votes(current_votes)
+
+                    st.success("All votes reset!" if reset_all else f"Votes reset for: {reset_q}")
                     try:
                         trigger_refresh()
                     except Exception:
                         pass
                     st.rerun()
     
-    # Delete existing polls (with confirmation)
+    # Delete existing polls (no confirmation per request)
     if polls_data:
         with st.sidebar.expander("🗑️ Delete Polls"):
             del_q = st.selectbox("Select a poll to delete:", options=list(polls_data.keys()), key="delete_select_question")
-            confirm_text = st.text_input("Type DELETE to confirm", key="delete_confirm_text")
             if st.button("Delete Selected Poll", key="delete_poll_btn"):
-                if confirm_text.strip().upper() != "DELETE":
-                    st.error("Please type DELETE to confirm.")
-                else:
-                    store = get_store()
-                    with store['lock']:
-                        current_polls = load_polls().copy()
-                        current_votes = load_user_votes().copy()
-                        if del_q in current_polls:
-                            del current_polls[del_q]
-                            save_polls(current_polls)
-                        for user_id in list(current_votes.keys()):
-                            if del_q in current_votes[user_id]:
-                                del current_votes[user_id][del_q]
-                            if len(current_votes[user_id]) == 0:
-                                del current_votes[user_id]
-                        save_user_votes(current_votes)
-                    st.success("Poll deleted!")
-                    st.info("💡 Click 'Refresh All Users' to update everyone's screen")
-                    st.rerun()
+                store = get_store()
+                with store['lock']:
+                    current_polls = load_polls().copy()
+                    current_votes = load_user_votes().copy()
+                    if del_q in current_polls:
+                        del current_polls[del_q]
+                        save_polls(current_polls)
+                    for user_id in list(current_votes.keys()):
+                        if del_q in current_votes[user_id]:
+                            del current_votes[user_id][del_q]
+                        if len(current_votes[user_id]) == 0:
+                            del current_votes[user_id]
+                    save_user_votes(current_votes)
+                st.success("Poll deleted!")
+                st.info("💡 Click 'Refresh All Users' to update everyone's screen")
+                st.rerun()
 else:
     # Regular user cannot create polls
     st.sidebar.info("👤 Regular User Mode\n\nOnly admins can add or delete questions.")
@@ -253,7 +264,7 @@ else:
 if polls_data:
     # Auto-refresh just before rendering results so counts/percentages update
     if st.session_state.user_role != "admin":
-        st_autorefresh(interval=8000, key="polls_results_refresh")
+        st_autorefresh(interval=1000, key="polls_results_refresh")
     st.header("📊 Available Polls")
     for question, votes in polls_data.items():
         st.subheader(question)
