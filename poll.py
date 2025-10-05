@@ -3,10 +3,21 @@ import json
 import os
 import time
 from datetime import datetime
-from streamlit_autorefresh import st_autorefresh
 
-# Auto-refresh every 2 seconds for real-time updates
-st_autorefresh(interval=2000, key="poll_autorefresh")
+# Custom auto-refresh implementation using meta refresh and session state
+def auto_refresh():
+    # Add meta refresh tag for auto-refresh every 3 seconds
+    st.markdown("""
+    <meta http-equiv="refresh" content="3">
+    <script>
+    setTimeout(function(){
+        window.location.reload(1);
+    }, 3000);
+    </script>
+    """, unsafe_allow_html=True)
+
+# Initialize auto-refresh
+auto_refresh()
 
 # File paths for persistent storage
 POLLS_FILE = "polls_data.json"
@@ -50,7 +61,7 @@ ADMIN_USERNAME = "SRMS"
 ADMIN_PASSWORD = "SRMS@450"
 
 st.title("🗳️ Dynamic Polling App")
-st.caption("🔄 Auto-refreshing every 2 seconds for real-time updates")
+st.caption("🔄 Auto-refreshing every 3 seconds for real-time updates")
 
 # Load current data from files
 polls_data = load_polls()
