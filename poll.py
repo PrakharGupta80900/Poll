@@ -82,8 +82,8 @@ if "user_id" not in st.session_state:
 # so only vote counts/percentages effectively change while inputs remain intact.
 
 # Admin credentials (prefer secrets; fallback to defaults)
-ADMIN_USERNAME = st.secrets.get("ADMIN_USERNAME", "SRMS")
-ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "SRMS@450")
+ADMIN_USERNAME ="SRMS"
+ADMIN_PASSWORD ="SRMS@450"
 
 st.title("🗳️ Myth or fact")
 
@@ -130,17 +130,19 @@ if st.session_state.user_role == "admin":
     st.sidebar.markdown("---")
     
     # Add new poll
-    with st.sidebar.expander("➕ Add New Poll"):
+    with st.sidebar.expander("➕ Add New Poll", expanded=True):
         # Show flash message after rerun if we just created a poll
         if st.session_state.get("flash_poll_created"):
             st.success("Poll created successfully!")
             del st.session_state["flash_poll_created"]
 
-        poll_question = st.text_input("Enter your question:", key="new_poll_question")
-        poll_options = st.text_area("Enter options (one per line):", key="new_poll_options")
-        overwrite = st.checkbox("Overwrite if question exists", value=False, key="new_poll_overwrite")
+    with st.form("new_poll_form", clear_on_submit=True):
+            poll_question = st.text_input("Enter your question:", key="new_poll_question")
+            poll_options = st.text_area("Enter options (one per line):", key="new_poll_options")
+            overwrite = st.checkbox("Overwrite if question exists", value=False, key="new_poll_overwrite")
+            create_submitted = st.form_submit_button("Create Poll")
         
-        if st.button("Create Poll"):
+    if create_submitted:
             if poll_question and poll_options:
                 q = poll_question.strip()
                 if not q:
@@ -176,9 +178,9 @@ if st.session_state.user_role == "admin":
                             if changed:
                                 save_user_votes(current_votes)
                             # Prepare to clear inputs and show success after rerun
-                            st.session_state["new_poll_question"] = ""
-                            st.session_state["new_poll_options"] = ""
-                            st.session_state["new_poll_overwrite"] = False
+                            for k in ("new_poll_question", "new_poll_options", "new_poll_overwrite"):
+                                if k in st.session_state:
+                                    del st.session_state[k]
                             st.session_state["flash_poll_created"] = True
                             trigger_refresh()
                             st.rerun()
@@ -247,23 +249,38 @@ if st.session_state.user_role == "admin":
     # Delete existing polls (no confirmation per request)
     if polls_data:
         with st.sidebar.expander("🗑️ Delete Polls"):
-            del_q = st.selectbox("Select a poll to delete:", options=list(polls_data.keys()), key="delete_select_question")
-            if st.button("Delete Selected Poll", key="delete_poll_btn"):
+            delete_all = st.checkbox("Select all polls", key="delete_all_polls")
+            if not delete_all:
+                del_q = st.selectbox("Select a poll to delete:", options=list(polls_data.keys()), key="delete_select_question")
+            action_label = "Delete All Polls" if delete_all else "Delete Selected Poll"
+            if st.button(action_label, key="delete_poll_btn"):
                 store = get_store()
                 with store['lock']:
                     current_polls = load_polls().copy()
                     current_votes = load_user_votes().copy()
-                    if del_q in current_polls:
-                        del current_polls[del_q]
+                    if delete_all:
+                        # Clear all polls and all votes
+                        current_polls.clear()
                         save_polls(current_polls)
-                    for user_id in list(current_votes.keys()):
-                        if del_q in current_votes[user_id]:
-                            del current_votes[user_id][del_q]
-                        if len(current_votes[user_id]) == 0:
+                        for user_id in list(current_votes.keys()):
                             del current_votes[user_id]
-                    save_user_votes(current_votes)
-                st.success("Poll deleted!")
+                        save_user_votes(current_votes)
+                    else:
+                        if del_q in current_polls:
+                            del current_polls[del_q]
+                            save_polls(current_polls)
+                        for user_id in list(current_votes.keys()):
+                            if del_q in current_votes[user_id]:
+                                del current_votes[user_id][del_q]
+                            if len(current_votes[user_id]) == 0:
+                                del current_votes[user_id]
+                        save_user_votes(current_votes)
+                st.success("All polls deleted!" if delete_all else "Poll deleted!")
                 st.info("💡 Click 'Refresh All Users' to update everyone's screen")
+                try:
+                    trigger_refresh()
+                except Exception:
+                    pass
                 st.rerun()
 else:
     # Regular user cannot create polls
