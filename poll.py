@@ -1,54 +1,38 @@
 import streamlit as st
-import json
-import os
+from streamlit_autorefresh import st_autorefresh
 import time
-from datetime import datetime
+from uuid import uuid4
+from threading import Lock
 
-# File paths for persistent storage
-POLLS_FILE = "polls_data.json"
-VOTES_FILE = "user_votes.json"
-REFRESH_TRIGGER_FILE = "refresh_trigger.json"
+@st.cache_resource(show_spinner=False)
+def get_store():
+    # A process-wide shared store (per Streamlit server process)
+    return {
+        'polls': {},                 # {question: {option: count}}
+        'user_votes': {},            # {user_id: {question: option}}
+        'last_refresh_ts': 0.0,      # float timestamp
+        'lock': Lock(),
+    }
 
-# Load data from files
 def load_polls():
-    if os.path.exists(POLLS_FILE):
-        try:
-            with open(POLLS_FILE, 'r') as f:
-                return json.load(f)
-        except:
-            return {}
-    return {}
+    return get_store()['polls']
 
-def save_polls(polls_data):
-    with open(POLLS_FILE, 'w') as f:
-        json.dump(polls_data, f)
+def save_polls(new_polls):
+    store = get_store()
+    store['polls'] = new_polls
 
 def load_user_votes():
-    if os.path.exists(VOTES_FILE):
-        try:
-            with open(VOTES_FILE, 'r') as f:
-                return json.load(f)
-        except:
-            return {}
-    return {}
+    return get_store()['user_votes']
 
-def save_user_votes(votes_data):
-    with open(VOTES_FILE, 'w') as f:
-        json.dump(votes_data, f)
+def save_user_votes(new_votes):
+    store = get_store()
+    store['user_votes'] = new_votes
 
 def get_refresh_trigger():
-    if os.path.exists(REFRESH_TRIGGER_FILE):
-        try:
-            with open(REFRESH_TRIGGER_FILE, 'r') as f:
-                data = json.load(f)
-                return data.get('timestamp', 0)
-        except:
-            return 0
-    return 0
+    return get_store()['last_refresh_ts']
 
 def trigger_refresh():
-    with open(REFRESH_TRIGGER_FILE, 'w') as f:
-        json.dump({'timestamp': time.time()}, f)
+    get_store()['last_refresh_ts'] = time.time()
 
 def check_for_refresh():
     if 'last_refresh_check' not in st.session_state:
@@ -67,16 +51,18 @@ if 'user_role' not in st.session_state or st.session_state.user_role != "admin":
 if "user_role" not in st.session_state:
     st.session_state.user_role = "user"
 if "user_id" not in st.session_state:
-    st.session_state.user_id = f"user_{int(time.time() * 1000)}"
+    st.session_state.user_id = str(uuid4())
 
-# Admin credentials (you can change these)
-ADMIN_USERNAME = "SRMS"
-ADMIN_PASSWORD = "SRMS@450"
+# Note: We'll trigger auto-refresh right before rendering the results section,
+# so only vote counts/percentages effectively change while inputs remain intact.
+
+# Admin credentials (prefer secrets; fallback to defaults)
+ADMIN_USERNAME = st.secrets.get("ADMIN_USERNAME", "SRMS")
+ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "SRMS@450")
 
 st.title("🗳️ Dynamic Polling App")
-st.caption("� Admin-controlled refresh system for real-time updates")
 
-# Load current data from files
+# Load current data from shared store (in-memory)
 polls_data = load_polls()
 user_votes_data = load_user_votes()
 
@@ -122,43 +108,116 @@ if st.session_state.user_role == "admin":
     with st.sidebar.expander("➕ Add New Poll"):
         poll_question = st.text_input("Enter your question:")
         poll_options = st.text_area("Enter options (one per line):")
+        overwrite = st.checkbox("Overwrite if question exists", value=False)
         
         if st.button("Create Poll"):
             if poll_question and poll_options:
-                options = [opt.strip() for opt in poll_options.split("\n") if opt.strip()]
-                if len(options) >= 2:
-                    # Load fresh data and add new poll
-                    current_polls = load_polls()
-                    current_polls[poll_question] = {opt: 0 for opt in options}
-                    save_polls(current_polls)
-                    st.success("Poll created successfully!")
-                    st.info("💡 Click 'Refresh All Users' to update everyone's screen")
+                q = poll_question.strip()
+                if not q:
+                    st.error("Question cannot be empty or whitespace.")
+                    st.stop()
+                # Deduplicate and validate options (min 2)
+                raw_opts = [opt.strip() for opt in poll_options.split("\n") if opt.strip()]
+                unique_opts = []
+                for o in raw_opts:
+                    if o not in unique_opts:
+                        unique_opts.append(o)
+                if len(unique_opts) >= 2:
+                    # Safe write with shared in-memory lock
+                    store = get_store()
+                    with store['lock']:
+                        current_polls = load_polls().copy()
+                        current_votes = load_user_votes().copy()
+                        if q in current_polls and not overwrite:
+                            st.error("Question already exists. Enable 'Overwrite' to replace it.")
+                        else:
+                            current_polls[q] = {opt: 0 for opt in unique_opts}
+                            save_polls(current_polls)
+                            # If overwriting existing poll, clear users' recorded votes for this question
+                            if q in current_votes:
+                                pass  # no direct mapping at top-level; per-user below
+                            changed = False
+                            for user_id in list(current_votes.keys()):
+                                if q in current_votes[user_id]:
+                                    del current_votes[user_id][q]
+                                    changed = True
+                                if len(current_votes[user_id]) == 0:
+                                    del current_votes[user_id]
+                            if changed:
+                                save_user_votes(current_votes)
+                            st.success("Poll created successfully!")
+                            st.info("💡 Click 'Refresh All Users' to update everyone's screen")
+                            trigger_refresh()
                 else:
                     st.error("Please provide at least 2 options.")
             else:
                 st.error("Please enter a question and options.")
+
+    # Reset polling data (votes) for a question without deleting the question
+    if polls_data:
+        with st.sidebar.expander("🧹 Reset Polling Data"):
+            reset_q = st.selectbox(
+                "Select a poll to reset votes:",
+                options=list(polls_data.keys()),
+                key="reset_select_question",
+            )
+            confirm_text = st.text_input("Type RESET to confirm", key="reset_confirm_text")
+            if st.button("Reset Votes", key="reset_votes_btn"):
+                if confirm_text.strip().upper() != "RESET":
+                    st.error("Please type RESET to confirm.")
+                else:
+                    store = get_store()
+                    with store['lock']:
+                        current_polls = load_polls().copy()
+                        current_votes = load_user_votes().copy()
+
+                        # Zero out vote counts for the selected poll
+                        if reset_q in current_polls:
+                            for opt in list(current_polls[reset_q].keys()):
+                                current_polls[reset_q][opt] = 0
+                            save_polls(current_polls)
+
+                        # Remove users' recorded vote for the selected poll
+                        changed = False
+                        for user_id in list(current_votes.keys()):
+                            if reset_q in current_votes[user_id]:
+                                del current_votes[user_id][reset_q]
+                                changed = True
+                            if user_id in current_votes and len(current_votes[user_id]) == 0:
+                                del current_votes[user_id]
+                        if changed:
+                            save_user_votes(current_votes)
+
+                    st.success(f"Votes reset for: {reset_q}")
+                    try:
+                        trigger_refresh()
+                    except Exception:
+                        pass
+                    st.rerun()
     
-    # Delete existing polls
+    # Delete existing polls (with confirmation)
     if polls_data:
         with st.sidebar.expander("🗑️ Delete Polls"):
-            st.write("Select polls to delete:")
-            for question in list(polls_data.keys()):
-                if st.button(f"Delete: {question[:30]}...", key=f"delete_{question}"):
-                    # Load fresh data and remove poll
-                    current_polls = load_polls()
-                    current_votes = load_user_votes()
-                    
-                    if question in current_polls:
-                        del current_polls[question]
-                        save_polls(current_polls)
-                    
-                    # Remove associated votes for this poll
-                    for user_id in list(current_votes.keys()):
-                        if question in current_votes[user_id]:
-                            del current_votes[user_id][question]
-                    save_user_votes(current_votes)
-                    
-                    st.success(f"Poll deleted!")
+            del_q = st.selectbox("Select a poll to delete:", options=list(polls_data.keys()), key="delete_select_question")
+            confirm_text = st.text_input("Type DELETE to confirm", key="delete_confirm_text")
+            if st.button("Delete Selected Poll", key="delete_poll_btn"):
+                if confirm_text.strip().upper() != "DELETE":
+                    st.error("Please type DELETE to confirm.")
+                else:
+                    store = get_store()
+                    with store['lock']:
+                        current_polls = load_polls().copy()
+                        current_votes = load_user_votes().copy()
+                        if del_q in current_polls:
+                            del current_polls[del_q]
+                            save_polls(current_polls)
+                        for user_id in list(current_votes.keys()):
+                            if del_q in current_votes[user_id]:
+                                del current_votes[user_id][del_q]
+                            if len(current_votes[user_id]) == 0:
+                                del current_votes[user_id]
+                        save_user_votes(current_votes)
+                    st.success("Poll deleted!")
                     st.info("💡 Click 'Refresh All Users' to update everyone's screen")
                     st.rerun()
 else:
@@ -167,6 +226,9 @@ else:
 
 # Show existing polls (available to both admin and users)
 if polls_data:
+    # Auto-refresh just before rendering results so counts/percentages update
+    if st.session_state.user_role != "admin":
+        st_autorefresh(interval=8000, key="polls_results_refresh")
     st.header("📊 Available Polls")
     for question, votes in polls_data.items():
         st.subheader(question)
@@ -190,20 +252,22 @@ if polls_data:
             else:
                 # Allow voting (both admin and users can vote)
                 if st.button(f"{opt} ({pct:.1f}%)", key=f"{question}_{opt}"):
-                    # Load fresh data and record vote
-                    current_polls = load_polls()
-                    current_votes = load_user_votes()
-                    
-                    # Update vote count
-                    if question in current_polls and opt in current_polls[question]:
-                        current_polls[question][opt] += 1
-                        save_polls(current_polls)
-                    
-                    # Record user's vote
-                    if st.session_state.user_id not in current_votes:
-                        current_votes[st.session_state.user_id] = {}
-                    current_votes[st.session_state.user_id][question] = opt
-                    save_user_votes(current_votes)
+                    # Record vote safely with shared in-memory lock
+                    store = get_store()
+                    with store['lock']:
+                        current_polls = load_polls().copy()
+                        current_votes = load_user_votes().copy()
+
+                        # Update vote count
+                        if question in current_polls and opt in current_polls[question]:
+                            current_polls[question][opt] += 1
+                            save_polls(current_polls)
+
+                        # Record user's vote
+                        if st.session_state.user_id not in current_votes:
+                            current_votes[st.session_state.user_id] = {}
+                        current_votes[st.session_state.user_id][question] = opt
+                        save_user_votes(current_votes)
                     
                     st.success("Thanks for voting!")
                     st.rerun()
