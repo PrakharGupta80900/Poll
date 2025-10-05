@@ -1,5 +1,30 @@
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
+try:
+        from streamlit_autorefresh import st_autorefresh
+except Exception:
+        # Fallback: minimal JS-based auto-refresh if streamlit-autorefresh isn't installed
+        def st_autorefresh(interval: int = 1000, key: str | None = None):
+                safe_key = key or "auto_refresh"
+                st.markdown(
+                        f"""
+                        <script>
+                        (function() {{
+                            const interval = {interval};
+                            const key = {safe_key!r};
+                            window._stAuto = window._stAuto || {{}};
+                            if (!window._stAuto[key]) {{
+                                window._stAuto[key] = true;
+                                setTimeout(function() {{
+                                    // Trigger a full page reload; Streamlit preserves widget state across reruns
+                                    window.location.reload();
+                                }}, interval);
+                            }}
+                        }})();
+                        </script>
+                        """,
+                        unsafe_allow_html=True,
+                )
+                return 0
 import time
 from uuid import uuid4
 from threading import Lock
