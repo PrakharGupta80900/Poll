@@ -131,9 +131,14 @@ if st.session_state.user_role == "admin":
     
     # Add new poll
     with st.sidebar.expander("➕ Add New Poll"):
-        poll_question = st.text_input("Enter your question:")
-        poll_options = st.text_area("Enter options (one per line):")
-        overwrite = st.checkbox("Overwrite if question exists", value=False)
+        # Show flash message after rerun if we just created a poll
+        if st.session_state.get("flash_poll_created"):
+            st.success("Poll created successfully!")
+            del st.session_state["flash_poll_created"]
+
+        poll_question = st.text_input("Enter your question:", key="new_poll_question")
+        poll_options = st.text_area("Enter options (one per line):", key="new_poll_options")
+        overwrite = st.checkbox("Overwrite if question exists", value=False, key="new_poll_overwrite")
         
         if st.button("Create Poll"):
             if poll_question and poll_options:
@@ -170,9 +175,13 @@ if st.session_state.user_role == "admin":
                                     del current_votes[user_id]
                             if changed:
                                 save_user_votes(current_votes)
-                            st.success("Poll created successfully!")
-                            st.info("💡 Click 'Refresh All Users' to update everyone's screen")
+                            # Prepare to clear inputs and show success after rerun
+                            st.session_state["new_poll_question"] = ""
+                            st.session_state["new_poll_options"] = ""
+                            st.session_state["new_poll_overwrite"] = False
+                            st.session_state["flash_poll_created"] = True
                             trigger_refresh()
+                            st.rerun()
                 else:
                     st.error("Please provide at least 2 options.")
             else:
@@ -263,8 +272,8 @@ else:
 # Show existing polls (available to both admin and users)
 if polls_data:
     # Auto-refresh just before rendering results so counts/percentages update
-    if st.session_state.user_role != "admin":
-        st_autorefresh(interval=1000, key="polls_results_refresh")
+    # Apply to all roles (admin and users)
+    st_autorefresh(interval=1000, key="polls_results_refresh")
     st.header("📊 Available Polls")
     for question, votes in polls_data.items():
         st.subheader(question)
