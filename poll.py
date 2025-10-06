@@ -28,6 +28,12 @@ except Exception:
 import time
 from uuid import uuid4
 from threading import Lock
+import pandas as pd
+try:
+    import altair as alt
+    _has_altair = True
+except Exception:
+    _has_altair = False
 
 @st.cache_resource(show_spinner=False)
 def get_store():
@@ -339,6 +345,31 @@ if polls_data:
         
         # Show total votes for this poll
         st.write(f"**Total votes for this poll:** {total_votes}")
+
+        # Visualization: Pie chart (with fallback)
+        if total_votes > 0:
+            chart_df = pd.DataFrame({
+                'Option': list(votes.keys()),
+                'Votes': list(votes.values()),
+            })
+            chart_df['Percent'] = (chart_df['Votes'] / total_votes) * 100.0
+            if _has_altair:
+                # Donut chart using innerRadius
+                donut = alt.Chart(chart_df).mark_arc(innerRadius=70).encode(
+                    theta=alt.Theta(field='Votes', type='quantitative', stack=True),
+                    color=alt.Color(field='Option', type='nominal'),
+                    tooltip=[
+                        alt.Tooltip('Option:N', title='Option'),
+                        alt.Tooltip('Votes:Q', title='Votes'),
+                        alt.Tooltip('Percent:Q', title='Percent', format='.1f')
+                    ]
+                ).properties(width=320, height=320)
+                st.altair_chart(donut, use_container_width=False)
+            else:
+                # Fallback to a simple bar chart if Altair isn't available
+                st.bar_chart(chart_df.set_index('Option'))
+        else:
+            st.caption("No votes yet to display a chart.")
         st.markdown("---")
 else:
     st.info("No polls available. " + 
