@@ -83,6 +83,8 @@ if "user_role" not in st.session_state:
     st.session_state.user_role = "user"
 if "user_id" not in st.session_state:
     st.session_state.user_id = str(uuid4())
+if "user_authenticated" not in st.session_state:
+    st.session_state.user_authenticated = False
 
 # Note: We'll trigger auto-refresh right before rendering the results section,
 # so only vote counts/percentages effectively change while inputs remain intact.
@@ -90,6 +92,7 @@ if "user_id" not in st.session_state:
 # Admin credentials (prefer secrets; fallback to defaults)
 ADMIN_USERNAME ="SRMS"
 ADMIN_PASSWORD ="SRMS@450"
+USER_PASSWORD = "CETR@450"  # Password for regular users to access polls
 
 st.title("🗳️ Myth or fact")
 
@@ -114,10 +117,27 @@ if st.session_state.user_role == "user":
                 else:
                     st.error("Invalid credentials!")
 
+# User password check
+if st.session_state.user_role == "user" and not st.session_state.user_authenticated:
+    st.header("🔐 Enter Password to Access Polls")
+    with st.form("user_password_form"):
+        user_password = st.text_input("Enter password to access polls:", type="password")
+        password_btn = st.form_submit_button("Access Polls")
+        
+        if password_btn:
+            if user_password == USER_PASSWORD:
+                st.session_state.user_authenticated = True
+                st.success("Access granted! You can now participate in polls.")
+                st.rerun()
+            else:
+                st.error("Incorrect password! Please try again.")
+    st.stop()  # Stop execution here if user is not authenticated
+
 # Logout button for admin
 if st.session_state.user_role == "admin":
     if st.sidebar.button("🚪 Logout"):
         st.session_state.user_role = "user"
+        st.session_state.user_authenticated = False  # Reset user authentication
         st.rerun()
 
 # Display current role
@@ -252,6 +272,11 @@ if st.session_state.user_role == "admin":
                         pass
                     st.rerun()
     
+    # Statistics button
+    if polls_data:
+        if st.sidebar.button("📈 View Statistics", key="view_stats_btn"):
+            st.session_state.show_stats = not st.session_state.get('show_stats', False)
+    
     # Delete existing polls (no confirmation per request)
     if polls_data:
         with st.sidebar.expander("🗑️ Delete Polls"):
@@ -297,96 +322,198 @@ if polls_data:
     # Auto-refresh just before rendering results so counts/percentages update
     # Apply to all roles (admin and users)
     st_autorefresh(interval=1000, key="polls_results_refresh")
-    st.header("📊 Available Polls")
-    for question, votes in polls_data.items():
-        st.subheader(question)
-        total_votes = sum(votes.values())
-        
-        # Check if current user has already voted for this poll
-        user_has_voted = (st.session_state.user_id in user_votes_data and 
-                         question in user_votes_data[st.session_state.user_id])
-
-        # Display options with percentages
-        for opt, count in votes.items():
-            pct = (count / total_votes * 100) if total_votes > 0 else 0
-            
-            if user_has_voted:
-                # Show results only, disable voting
-                user_choice = user_votes_data[st.session_state.user_id][question]
-                if opt == user_choice:
-                    st.success(f"✓ {opt} ({pct:.1f}%) - Your vote")
-                else:
-                    st.info(f"{opt} ({pct:.1f}%)")
-            else:
-                # Allow voting (both admin and users can vote)
-                if st.button(f"{opt} ({pct:.1f}%)", key=f"{question}_{opt}"):
-                    # Record vote safely with shared in-memory lock
-                    store = get_store()
-                    with store['lock']:
-                        current_polls = load_polls().copy()
-                        current_votes = load_user_votes().copy()
-
-                        # Update vote count
-                        if question in current_polls and opt in current_polls[question]:
-                            current_polls[question][opt] += 1
-                            save_polls(current_polls)
-
-                        # Record user's vote
-                        if st.session_state.user_id not in current_votes:
-                            current_votes[st.session_state.user_id] = {}
-                        current_votes[st.session_state.user_id][question] = opt
-                        save_user_votes(current_votes)
+    
+    if st.session_state.user_role == "admin":
+        # Show statistics and charts if button was clicked
+        if st.session_state.get('show_stats', False):
+            st.header("📈 Poll Statistics")
+            # Display charts for each poll in statistics
+            for idx, (question, votes) in enumerate(polls_data.items(), 1):
+                st.write(f"**Question {idx}:** {question}")
+                total_votes = sum(votes.values())
+                
+                # Show chart in statistics
+                if total_votes > 0:
+                    chart_df = pd.DataFrame({
+                        'Option': list(votes.keys()),
+                        'Votes': list(votes.values()),
+                    })
+                    chart_df['Percent'] = (chart_df['Votes'] / total_votes) * 100.0
+                    if _has_altair:
+                        # Bar chart with vote counts inside bars
+                        bars = alt.Chart(chart_df).mark_bar(size=40).encode(
+                            x=alt.X('Option:N', title='Options', axis=alt.Axis(labelPadding=5), scale=alt.Scale(paddingInner=0.2)),
+                            y=alt.Y('Votes:Q', title='Vote Count'),
+                            color=alt.Color('Option:N', legend=None),
+                            tooltip=[
+                                alt.Tooltip('Option:N', title='Option'),
+                                alt.Tooltip('Votes:Q', title='Votes'),
+                                alt.Tooltip('Percent:Q', title='Percent', format='.1f')
+                            ]
+                        ).properties(width=400, height=300)
+                        
+                        # Add text labels with vote counts inside bars
+                        text = alt.Chart(chart_df).mark_text(
+                            align='center',
+                            baseline='middle',
+                            dy=0,
+                            fontSize=14,
+                            fontWeight='bold',
+                            color='white'
+                        ).encode(
+                            x=alt.X('Option:N'),
+                            y=alt.Y('Votes:Q', scale=alt.Scale(type='linear')),
+                            text=alt.Text('Votes:Q')
+                        )
+                        
+                        chart = bars + text
+                        st.altair_chart(chart, use_container_width=True)
+                    else:
+                        # Fallback to a simple bar chart if Altair isn't available
+                        st.bar_chart(chart_df.set_index('Option'))
                     
-                    st.success("Thanks for voting!")
-                    st.rerun()
-        
-        if user_has_voted:
-            st.write("✅ You have already voted in this poll.")
-        
-        # Show total votes for this poll
-        st.write(f"**Total votes for this poll:** {total_votes}")
-
-        # Visualization: Pie chart (with fallback)
-        if total_votes > 0:
-            chart_df = pd.DataFrame({
-                'Option': list(votes.keys()),
-                'Votes': list(votes.values()),
-            })
-            chart_df['Percent'] = (chart_df['Votes'] / total_votes) * 100.0
-            if _has_altair:
-                # Donut chart using innerRadius
-                donut = alt.Chart(chart_df).mark_arc(innerRadius=70).encode(
-                    theta=alt.Theta(field='Votes', type='quantitative', stack=True),
-                    color=alt.Color(field='Option', type='nominal'),
-                    tooltip=[
-                        alt.Tooltip('Option:N', title='Option'),
-                        alt.Tooltip('Votes:Q', title='Votes'),
-                        alt.Tooltip('Percent:Q', title='Percent', format='.1f')
-                    ]
-                ).properties(width=320, height=320)
-                st.altair_chart(donut, use_container_width=False)
-            else:
-                # Fallback to a simple bar chart if Altair isn't available
-                st.bar_chart(chart_df.set_index('Option'))
+                    # Show total votes for this poll
+                    st.write(f"**Total votes:** {total_votes}")
+                else:
+                    st.caption("No votes yet to display a chart.")
+                st.markdown("---")
         else:
-            st.caption("No votes yet to display a chart.")
-        st.markdown("---")
+            # Show message when statistics are not displayed
+            st.info("Click the '📈 View Statistics' button in the sidebar to see detailed poll statistics and charts.")
+    else:
+        # Regular user view: Show questions one by one
+        st.header("📊 Available Polls")
+        
+        # Get list of questions to determine current question
+        question_list = list(polls_data.keys())
+        
+        if question_list:
+            # Find the first unanswered question for this user
+            current_question_idx = 0
+            for idx, question in enumerate(question_list):
+                user_has_voted = (st.session_state.user_id in user_votes_data and 
+                                question in user_votes_data[st.session_state.user_id])
+                if not user_has_voted:
+                    current_question_idx = idx
+                    break
+            else:
+                # All questions have been answered
+                current_question_idx = len(question_list)
+            
+            # Show progress
+            st.progress(current_question_idx / len(question_list))
+            st.write(f"Progress: {current_question_idx}/{len(question_list)} questions answered")
+            
+            if current_question_idx < len(question_list):
+                # Show current question
+                question = question_list[current_question_idx]
+                votes = polls_data[question]
+                
+                st.subheader(f"Question {current_question_idx + 1}: {question}")
+                total_votes = sum(votes.values())
+                
+                # Check if current user has already voted for this poll
+                user_has_voted = (st.session_state.user_id in user_votes_data and 
+                                question in user_votes_data[st.session_state.user_id])
+
+                # Display options with percentages
+                for opt, count in votes.items():
+                    pct = (count / total_votes * 100) if total_votes > 0 else 0
+                    
+                    if user_has_voted:
+                        # Show results only, disable voting
+                        user_choice = user_votes_data[st.session_state.user_id][question]
+                        if opt == user_choice:
+                            st.success(f"✓ {opt} ({pct:.1f}%) - Your vote")
+                        else:
+                            st.info(f"{opt} ({pct:.1f}%)")
+                    else:
+                        # Allow voting
+                        if st.button(f"{opt} ({pct:.1f}%)", key=f"{question}_{opt}"):
+                            # Record vote safely with shared in-memory lock
+                            store = get_store()
+                            with store['lock']:
+                                current_polls = load_polls().copy()
+                                current_votes = load_user_votes().copy()
+
+                                # Update vote count
+                                if question in current_polls and opt in current_polls[question]:
+                                    current_polls[question][opt] += 1
+                                    save_polls(current_polls)
+
+                                # Record user's vote
+                                if st.session_state.user_id not in current_votes:
+                                    current_votes[st.session_state.user_id] = {}
+                                current_votes[st.session_state.user_id][question] = opt
+                                save_user_votes(current_votes)
+                            
+                            st.success("Thanks for voting! Moving to next question...")
+                            st.rerun()
+                
+                if user_has_voted:
+                    st.write("✅ You have answered this question.")
+                    if st.button("Continue to Next Question"):
+                        st.rerun()
+                
+                # Show total votes for this poll
+                st.write(f"**Total votes for this poll:** {total_votes}")
+
+                # Visualization: Bar chart (with fallback)
+                if total_votes > 0:
+                    chart_df = pd.DataFrame({
+                        'Option': list(votes.keys()),
+                        'Votes': list(votes.values()),
+                    })
+                    chart_df['Percent'] = (chart_df['Votes'] / total_votes) * 100.0
+                    if _has_altair:
+                        # Bar chart with vote counts inside bars
+                        bars = alt.Chart(chart_df).mark_bar(size=40).encode(
+                            x=alt.X('Option:N', title='Options', axis=alt.Axis(labelPadding=5), scale=alt.Scale(paddingInner=0.2)),
+                            y=alt.Y('Votes:Q', title='Vote Count'),
+                            color=alt.Color('Option:N', legend=None),
+                            tooltip=[
+                                alt.Tooltip('Option:N', title='Option'),
+                                alt.Tooltip('Votes:Q', title='Votes'),
+                                alt.Tooltip('Percent:Q', title='Percent', format='.1f')
+                            ]
+                        ).properties(width=400, height=300)
+                        
+                        # Add text labels with vote counts inside bars
+                        text = alt.Chart(chart_df).mark_text(
+                            align='center',
+                            baseline='middle',
+                            dy=0,
+                            fontSize=14,
+                            fontWeight='bold',
+                            color='white'
+                        ).encode(
+                            x=alt.X('Option:N'),
+                            y=alt.Y('Votes:Q', scale=alt.Scale(type='linear')),
+                            text=alt.Text('Votes:Q')
+                        )
+                        
+                        chart = bars + text
+                        st.altair_chart(chart, use_container_width=True)
+                    else:
+                        # Fallback to a simple bar chart if Altair isn't available
+                        st.bar_chart(chart_df.set_index('Option'))
+                else:
+                    st.caption("No votes yet to display a chart.")
+            else:
+                # All questions completed
+                st.success("🎉 Congratulations! You have completed all questions!")
+                
+                # Show summary of all answers
+                st.subheader("📋 Your Answer Summary")
+                for idx, question in enumerate(question_list, 1):
+                    if st.session_state.user_id in user_votes_data and question in user_votes_data[st.session_state.user_id]:
+                        user_answer = user_votes_data[st.session_state.user_id][question]
+                        st.write(f"**Question {idx}:** {question}")
+                        st.write(f"**Your Answer:** {user_answer}")
+                        st.markdown("---")
+        else:
+            st.info("No polls available. Please wait for an admin to create polls.")
 else:
     st.info("No polls available. " + 
            ("Create one from the admin controls in the sidebar." if st.session_state.user_role == "admin" 
             else "Please wait for an admin to create polls."))
-
-# Admin statistics (only for admin)
-if st.session_state.user_role == "admin" and polls_data:
-    with st.expander("📈 Admin Statistics"):
-        st.write("**Poll Overview:**")
-        for question, votes in polls_data.items():
-            total_votes = sum(votes.values())
-            st.write(f"- {question}: {total_votes} total votes")
-            for opt, count in votes.items():
-                pct = (count / total_votes * 100) if total_votes > 0 else 0
-                st.write(f"  - {opt}: {count} votes ({pct:.1f}%)")
-        
-        # Show total unique users who voted
-        total_users = len(user_votes_data)
-        st.write(f"**Total unique users:** {total_users}")
