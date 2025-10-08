@@ -90,9 +90,9 @@ if "user_authenticated" not in st.session_state:
 # so only vote counts/percentages effectively change while inputs remain intact.
 
 # Admin credentials (prefer secrets; fallback to defaults)
-ADMIN_USERNAME ="SRMS"
-ADMIN_PASSWORD ="SRMS@450"
-USER_PASSWORD = "CETR@450"  # Password for regular users to access polls
+ADMIN_USERNAME ="srms"
+ADMIN_PASSWORD ="srms@450"
+USER_PASSWORD = "8090"  # Password for regular users to access polls
 
 st.title("🗳️ Myth or fact")
 
@@ -319,17 +319,27 @@ else:
 
 # Show existing polls (available to both admin and users)
 if polls_data:
-    # Auto-refresh just before rendering results so counts/percentages update
-    # Apply to all roles (admin and users)
-    st_autorefresh(interval=1000, key="polls_results_refresh")
-    
     if st.session_state.user_role == "admin":
         # Show statistics and charts if button was clicked
         if st.session_state.get('show_stats', False):
+            # Auto-refresh for admin to see real-time vote updates in statistics
+            st_autorefresh(interval=1000, key="admin_stats_refresh")
+            
             st.header("📈 Poll Statistics")
+            
+            # Calculate global Y-axis scale for all polls to ensure consistency
+            global_max_votes = 0
+            for question, votes in polls_data.items():
+                vote_values = list(votes.values())
+                poll_max = max(vote_values) if vote_values else 0
+                global_max_votes = max(global_max_votes, poll_max)
+            
+            # Set consistent Y-axis scale for all charts
+            y_max = max(10, global_max_votes + 1)
+            
             # Display charts for each poll in statistics
             for idx, (question, votes) in enumerate(polls_data.items(), 1):
-                st.write(f"**Question {idx}:** {question}")
+                st.write(f"**Poll {idx}**")
                 total_votes = sum(votes.values())
                 
                 # Show chart in statistics
@@ -340,10 +350,10 @@ if polls_data:
                     })
                     chart_df['Percent'] = (chart_df['Votes'] / total_votes) * 100.0
                     if _has_altair:
-                        # Bar chart with vote counts inside bars
+                        # Bar chart with vote counts inside bars using global Y-axis scale
                         bars = alt.Chart(chart_df).mark_bar(size=40).encode(
                             x=alt.X('Option:N', title='Options', axis=alt.Axis(labelPadding=5), scale=alt.Scale(paddingInner=0.2)),
-                            y=alt.Y('Votes:Q', title='Vote Count'),
+                            y=alt.Y('Votes:Q', title='Vote Count', scale=alt.Scale(domain=[0, y_max])),
                             color=alt.Color('Option:N', legend=None),
                             tooltip=[
                                 alt.Tooltip('Option:N', title='Option'),
@@ -362,7 +372,7 @@ if polls_data:
                             color='white'
                         ).encode(
                             x=alt.X('Option:N'),
-                            y=alt.Y('Votes:Q', scale=alt.Scale(type='linear')),
+                            y=alt.Y('Votes:Q', scale=alt.Scale(domain=[0, y_max])),
                             text=alt.Text('Votes:Q')
                         )
                         
@@ -370,6 +380,7 @@ if polls_data:
                         st.altair_chart(chart, use_container_width=True)
                     else:
                         # Fallback to a simple bar chart if Altair isn't available
+                        # Note: Streamlit's bar_chart doesn't support custom y-axis limits
                         st.bar_chart(chart_df.set_index('Option'))
                     
                     # Show total votes for this poll
@@ -382,6 +393,9 @@ if polls_data:
             st.info("Click the '📈 View Statistics' button in the sidebar to see detailed poll statistics and charts.")
     else:
         # Regular user view: Show questions one by one
+        # Auto-refresh for users to see real-time vote updates
+        st_autorefresh(interval=1000, key="polls_results_refresh")
+        
         st.header("📊 Available Polls")
         
         # Get list of questions to determine current question
@@ -454,51 +468,6 @@ if polls_data:
                     st.write("✅ You have answered this question.")
                     if st.button("Continue to Next Question"):
                         st.rerun()
-                
-                # Show total votes for this poll
-                st.write(f"**Total votes for this poll:** {total_votes}")
-
-                # Visualization: Bar chart (with fallback)
-                if total_votes > 0:
-                    chart_df = pd.DataFrame({
-                        'Option': list(votes.keys()),
-                        'Votes': list(votes.values()),
-                    })
-                    chart_df['Percent'] = (chart_df['Votes'] / total_votes) * 100.0
-                    if _has_altair:
-                        # Bar chart with vote counts inside bars
-                        bars = alt.Chart(chart_df).mark_bar(size=40).encode(
-                            x=alt.X('Option:N', title='Options', axis=alt.Axis(labelPadding=5), scale=alt.Scale(paddingInner=0.2)),
-                            y=alt.Y('Votes:Q', title='Vote Count'),
-                            color=alt.Color('Option:N', legend=None),
-                            tooltip=[
-                                alt.Tooltip('Option:N', title='Option'),
-                                alt.Tooltip('Votes:Q', title='Votes'),
-                                alt.Tooltip('Percent:Q', title='Percent', format='.1f')
-                            ]
-                        ).properties(width=400, height=300)
-                        
-                        # Add text labels with vote counts inside bars
-                        text = alt.Chart(chart_df).mark_text(
-                            align='center',
-                            baseline='middle',
-                            dy=0,
-                            fontSize=14,
-                            fontWeight='bold',
-                            color='white'
-                        ).encode(
-                            x=alt.X('Option:N'),
-                            y=alt.Y('Votes:Q', scale=alt.Scale(type='linear')),
-                            text=alt.Text('Votes:Q')
-                        )
-                        
-                        chart = bars + text
-                        st.altair_chart(chart, use_container_width=True)
-                    else:
-                        # Fallback to a simple bar chart if Altair isn't available
-                        st.bar_chart(chart_df.set_index('Option'))
-                else:
-                    st.caption("No votes yet to display a chart.")
             else:
                 # All questions completed
                 st.success("🎉 Congratulations! You have completed all questions!")
