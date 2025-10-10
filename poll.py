@@ -92,7 +92,7 @@ if "user_authenticated" not in st.session_state:
 # Admin credentials (prefer secrets; fallback to defaults)
 ADMIN_USERNAME ="srms"
 ADMIN_PASSWORD ="srms@450"
-USER_PASSWORD = "8090"  # Password for regular users to access polls
+USER_PASSWORD = "cetr"  # Password for regular users to access polls
 
 st.title("🗳️ Myth or fact")
 
@@ -485,4 +485,5 @@ if polls_data:
 else:
     st.info("No polls available. " + 
            ("Create one from the admin controls in the sidebar." if st.session_state.user_role == "admin" 
+
             else "Please wait for an admin to create polls."))
